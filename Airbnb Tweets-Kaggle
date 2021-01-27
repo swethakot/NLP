@@ -1,0 +1,682 @@
+#%% md
+
+
+**AirBnb Tweets Data**
+
+
+
+#%%
+
+import re
+import nltk
+from nltk.corpus import stopwords
+import pandas as pd
+from nltk.tokenize import TreebankWordTokenizer
+from nltk.stem.porter import PorterStemmer
+from nltk.stem import WordNetLemmatizer
+from nltk.corpus import wordnet
+from nltk.tokenize import TweetTokenizer
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer, HashingVectorizer
+from sklearn import preprocessing
+from sklearn import linear_model
+from numpy import savetxt
+import numpy as np
+import xgboost as xgb
+!pip install unidecode
+import unidecode
+from sklearn.metrics import f1_score, make_scorer
+import spacy
+#from TokenizationTest import TokenizationTest
+from happyfuntokenizing import Tokenizer as potts
+nltk.download('wordnet')
+nltk.download('averaged_perceptron_tagger')
+nltk.download('stopwords')
+from nltk.corpus import stopwords as nltk_stopwords
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.naive_bayes import GaussianNB
+!pip install symspellpy
+from symspellpy.symspellpy import SymSpell, Verbosity
+import pkg_resources
+import re, string, json
+from tqdm import tqdm
+from nltk.corpus import stopwords
+from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import  cross_val_score
+
+#%% md
+
+Preprocessing Data 
+Tokenization, Lemmatization, Stemming 
+
+1.   Function regextokenizer was used to remove punctuations,special characters, @ and white spaces
+2.   Function Spell_Checker was used to correct the spellings of the words and normalize
+3.Function normalize_contractions was used to remove contractions
+
+
+
+#%%
+
+from bs4 import BeautifulSoup
+
+
+#%%
+
+def regexptokenizer(data):
+  data['text'] =  data['text'].map(lambda x:BeautifulSoup(x, 'lxml').get_text())
+  #remove words which are starts with @ symbols
+  data['text'] = data['text'].map(lambda x:re.sub('@\w*','',str(x)))
+  #remove link starts with https
+  #simplify_punctuation  
+  data['text'] = data['text'].map(lambda x:re.sub(r'([!?,;])\1+', r'\1', str(x)))
+  data['text'] = data['text'].map(lambda x:re.sub(r'\.{2,}', r'...', str(x)))
+  data['text'] = data['text'].map(lambda x:re.sub('http.*','',str(x)))
+  #removing data and time (numeric values)
+  data['text'] = data['text'].map(lambda x:re.sub('[0-9]','',str(x)))
+  #removing special characters
+  data['text'] = data['text'].map(lambda x:re.sub('[#|*|$|:|\\|&|]','',str(x)))
+  #normalizing whitespace
+  data['text'] = data['text'].map(lambda x:re.sub(r"//t",r"\t", str(x)))
+  data['text'] = data['text'].map(lambda x:re.sub(r"( )\1+",r"\1", str(x)))
+  data['text'] = data['text'].map(lambda x:re.sub(r"(\n)\1+",r"\1", str(x)))
+  data['text'] = data['text'].map(lambda x:re.sub(r"(\r)\1+",r"\1", str(x)))
+  data['text'] = data['text'].map(lambda x:re.sub(r"(\t)\1+",r"\1", str(x)))
+  data['text'] = data['text'].map(lambda x:unidecode.unidecode(str(x)))
+
+
+#%%
+
+def normalize_contractions(sentence_list):
+    contraction_list = json.loads(open('english_contractions.json', 'r').read())
+    norm_sents = []
+    print("Normalizing contractions")
+    for sentence in tqdm(sentence_list):
+        norm_sents.append(_normalize_contractions_text(sentence, contraction_list))
+    return norm_sents
+
+#%%
+
+def _normalize_contractions_text(text, contractions):
+    """
+    This function normalizes english contractions.
+    """
+    new_token_list = []
+    token_list = text.split()
+    for word_pos in range(len(token_list)):
+        word = token_list[word_pos]
+        first_upper = False
+        if word[0].isupper():
+            first_upper = True
+        if word.lower() in contractions:
+            replacement = contractions[word.lower()]
+            if first_upper:
+                replacement = replacement[0].upper()+replacement[1:]
+            replacement_tokens = replacement.split()
+            if len(replacement_tokens)>1:
+                new_token_list.append(replacement_tokens[0])
+                new_token_list.append(replacement_tokens[1])
+            else:
+                new_token_list.append(replacement_tokens[0])
+        else:
+            new_token_list.append(word)
+    sentence = " ".join(new_token_list).strip(" ")
+    return sentence
+
+#%%
+
+def spell_correction(sentence_list):
+    max_edit_distance_dictionary= 3
+    prefix_length = 4
+    spellchecker = SymSpell(max_edit_distance_dictionary, prefix_length)
+    dictionary_path = pkg_resources.resource_filename(
+        "symspellpy", "frequency_dictionary_en_82_765.txt")
+    bigram_path = pkg_resources.resource_filename(
+        "symspellpy", "frequency_bigramdictionary_en_243_342.txt")
+    spellchecker.load_dictionary(dictionary_path, term_index=0, count_index=1)
+    spellchecker.load_bigram_dictionary(dictionary_path, term_index=0, count_index=2)
+    norm_sents = []
+    print("Spell correcting")
+    for sentence in tqdm(sentence_list):
+        norm_sents.append(_spell_correction_text(sentence, spellchecker))
+    return norm_sents
+
+#%%
+
+def is_numeric(text):
+    for char in text:
+        if not (char in "0123456789" or char in ",%.$"):
+            return False
+    return True
+
+#%%
+
+def _reduce_exaggerations(text):
+    """
+    Auxiliary function to help with exxagerated words.
+    Examples:
+        woooooords -> words
+        yaaaaaaaaaaaaaaay -> yay
+    """
+    correction = str(text)
+    #TODO work on complexity reduction.
+    return re.sub(r'([\w])\1+', r'\1', correction)
+
+#%%
+
+def get_part_of_speech_tags(token):
+    
+    """Maps POS tags to first character lemmatize() accepts.
+    We are focussing on Verbs, Nouns, Adjectives and Adverbs here."""
+
+    tag_dict = {"J": wordnet.ADJ,
+                "N": wordnet.NOUN,
+                "V": wordnet.VERB,
+                "R": wordnet.ADV}
+    
+    tag = nltk.pos_tag([token])[0][1][0].upper()
+    
+    return tag_dict.get(tag, wordnet.NOUN)
+
+#%%
+
+def whitespace_tokenizer(data):
+  return str.split(data)
+
+def potter_tokenizer(data):
+  tokenizer= potts()
+  return tokenizer.tokenize(data)
+
+def spacy_tokenizer(data):
+  spacy_tokens=nlp(data)
+  return [token.text for token in spacy_tokens]
+
+def spacy_lemmatizer(data):
+  spacy_tokens=nlp(data)
+  tokens = [token.lemma_ for token in spacy_tokens]
+  #tokens = [unidecode.unidecode(accented_string) for token in tokens]
+  return tokens
+
+def nltk_treebank_tokenizer(data):
+  tokenizer= TreebankWordTokenizer()
+  return tokenizer.tokenize(data)
+
+
+def nltk_tweet_tokenizer(data):
+    tokenizer = TweetTokenizer()
+    return tokenizer.tokenize(data)
+
+def nltk_twitter_stemmer_tokenizer(data):
+  tokenizer= TwitterTokenizer()
+  stemmer = PorterStemmer()
+  tokens= tokenizer.tokenize(data)
+  return [stemmer.stem(token) for token in tokens]
+
+def nltk_twitter_lemmatizer_tokenizer(data):
+  tokenizer= TweetTokenizer()
+  lemmatizer = WordNetLemmatizer()  
+  tokens= tokenizer.tokenize(data)
+  tokens = [lemmatizer.lemmatize(token, get_part_of_speech_tags(token)) for token in tokens]   
+  return tokens
+
+def nltk_treebank_stemmer_tokenizer(data):
+  tokenizer= TreebankWordTokenizer()
+  stemmer = PorterStemmer()
+  tokens= tokenizer.tokenize(data)
+  return [stemmer.stem(token) for token in tokens]
+
+def nltk_treebank_lemmatizer_tokenizer(data):
+  tokenizer= TreebankWordTokenizer()
+  lemmatizer = WordNetLemmatizer()  
+  tokens= tokenizer.tokenize(data)
+  return [lemmatizer.lemmatize(token, get_part_of_speech_tags(token)) for token in tokens]
+
+#%%
+
+def read_data(df, tokenizer):
+    corpus=[]
+    Y=[]
+    for idx in range(len(train_df)):
+        label=df['Target'][idx]
+        text=df['text'][idx]
+        tokens=' '.join(tokenizer(text))
+        corpus.append(tokens)
+        Y.append(label)
+    return corpus, Y
+
+#%%
+
+def read_test_data(df, tokenizer):
+    corpus=[]
+    for idx in range(len(train_df)):
+        text=df['text'][idx]
+        tokens=' '.join(tokenizer(text))
+        corpus.append(tokens)
+    return corpus
+
+#%%
+
+def _spell_correction_text(text, spellchecker):
+    """
+    This function does very simple spell correction normalization using pyspellchecker module. 
+    It works over a tokenized sentence and only the token representations are changed.
+    """
+    if len(text) < 1:
+        return ""
+    #Spell checker config
+    max_edit_distance_lookup = 2
+    suggestion_verbosity = Verbosity.TOP # TOP, CLOSEST, ALL
+    #End of Spell checker config
+    token_list = text.split()
+    for word_pos in range(len(token_list)):
+        word = token_list[word_pos]
+        if word is None:
+            token_list[word_pos] = ""
+            continue
+        if not '\n' in word and word not in string.punctuation and not is_numeric(word) and not (word.lower() in spellchecker.words.keys()):
+            suggestions = spellchecker.lookup(word.lower(), suggestion_verbosity, max_edit_distance_lookup)
+            #Checks first uppercase to conserve the case.
+            upperfirst = word[0].isupper()
+            #Checks for correction suggestions.
+            if len(suggestions) > 0:
+                correction = suggestions[0].term
+                replacement = correction
+            #We call our _reduce_exaggerations function if no suggestion is found. Maybe there are repeated chars.
+            else:
+                replacement = _reduce_exaggerations(word)
+            #Takes the case back to the word.
+            if upperfirst:
+                replacement = replacement[0].upper()+replacement[1:]
+            word = replacement
+            token_list[word_pos] = word
+    return " ".join(token_list).strip()
+
+#%% md
+
+Data Loading
+
+#%%
+
+with open('train.csv',mode='r', encoding="ISO-8859-1") as csv_file:
+    train_df = pd.read_csv(csv_file)
+
+#%%
+
+with open('test.csv',mode='r', encoding="ISO-8859-1") as csv_file:
+    test_df = pd.read_csv(csv_file)
+
+#%% md
+
+Data Pre-Processing for tweets
+
+
+#%%
+
+regexptokenizer(train_df)
+regexptokenizer(test_df)
+
+#%%
+
+train_df['text'] = normalize_contractions(train_df['text'])
+#train_df['text'] = spell_correction(train_df['text'])
+
+#%%
+
+test_df['text'] = normalize_contractions(test_df['text'])
+#test_df['text'] = spell_correction(test_df['text'])
+
+#%%
+
+train_df['text']
+
+#%% md
+
+Tokenization, Lemmatization and Stop-Word Removal
+
+#%%
+
+# spaCy lemmatization needs tagger but disable the rest
+nlp = spacy.load('en_core_web_sm', disable=['ner,parser'])
+nlp.remove_pipe('ner')
+nlp.remove_pipe('parser')
+
+#%% md
+
+Tokenizer Evaluation based on Cross-Validation Score
+
+#%%
+
+def evaluate_tokenizer(tokenizer):
+  train_corpus, train_labels=read_data(train_df, tokenizer)
+  test_corpus = read_test_data(test_df, tokenizer)
+
+  vectorizer = CountVectorizer(max_features=10000, analyzer=str.split, lowercase=False, strip_accents=None, binary=True)
+  X_train = vectorizer.fit_transform(train_corpus)
+  X_test = vectorizer.transform(test_corpus)
+
+  le = preprocessing.LabelEncoder()
+  le.fit(train_labels)
+  Y_train=le.transform(train_labels)
+  #Y_test=le.transform(test_labels)
+  logreg = linear_model.LogisticRegression(C=1.0, solver='lbfgs', penalty='l2')
+  cv = cross_val_score(logreg, X_train, Y_train, scoring='f1_macro', cv=5, n_jobs=5, verbose=10)
+  #logreg.fit(X_train, Y_train)
+  print("Function '%s' Accuracy: %.3f" % (tokenizer.__name__, cv.mean()))
+
+#%%
+
+tokenizers= [whitespace_tokenizer,potter_tokenizer, spacy_tokenizer, spacy_lemmatizer, nltk_treebank_tokenizer, nltk_treebank_stemmer_tokenizer, nltk_treebank_lemmatizer_tokenizer]
+for tokenizer in tokenizers:
+   print(evaluate_tokenizer(tokenizer))
+
+#%% md
+
+Chose Spacy Lemmatizer since it gave best evaluation performance
+
+#%%
+
+train_corpus, train_labels=read_data(train_df, spacy_lemmatizer)
+test_corpus =read_test_data(test_df, spacy_lemmatizer)
+vectorizer = CountVectorizer(max_features=10000, analyzer=str.split, lowercase=True, strip_accents='unicode', binary=False)
+#vectorizer = TfidfVectorizer(ngram_range=(1, 2))
+X_train = vectorizer.fit_transform(train_corpus)
+X_test = vectorizer.transform(test_corpus)
+le = preprocessing.LabelEncoder()
+le.fit(train_labels)
+Y_train=le.transform(train_labels)
+
+#%%
+
+train_corpus
+
+#%% md
+
+Gaussian Naive Bayes Run - Commented out due to bad results
+
+#%%
+
+#gb = GaussianNB()
+#gb.fit(X_train.toarray(), Y_train)
+
+#%%
+
+#train_preds = gb.predict(X_train.toarray())
+#print(f1_score(Y_train, train_preds, average='macro'))
+
+#%%
+
+#nb_preds = gb.predict(X_test.toarray())
+#nb_preds
+
+#%%
+
+#nb_original_labels = le.inverse_transform(nb_preds)
+#df = pd.DataFrame()
+#df['id'] = test_df['id']
+#df['Target'] = nb_original_labels
+#df.head()
+
+#%%
+
+#with open('nb_preds.csv', 'w') as csv_file:
+#  df.to_csv(csv_file, header=True)
+
+#%% md
+
+Logistic Regression Run
+
+#%%
+
+from sklearn.linear_model import LogisticRegression as lg
+from sklearn.model_selection import cross_val_score
+
+#%% md
+
+Grid Search to find best parameters
+
+#%%
+
+logistic_reg = LogisticRegression(multi_class="auto", max_iter=1000, random_state=0, penalty='l2')
+params = {'C':np.logspace(-4, 4, 20),
+          'solver':["lbfgs", "liblinear"]}
+grid = GridSearchCV(estimator=logistic_reg, param_grid=params, n_jobs=5, cv=5, verbose=10, scoring='f1_macro', return_train_score=True)
+grid.fit(X_train, Y_train)
+grid.best_params_
+
+#%%
+
+grid.best_score_
+
+#%% md
+
+TfIdf Vectorizer - Commented out due to bad performance
+
+#%%
+
+#tfid=TfidfVectorizer(analyzer=str.split, lowercase=True, strip_accents='unicode')
+#X_train_idf = tfid.fit_transform(train_corpus)
+#X_test_idf = tfid.transform(test_corpus)
+
+#%%
+
+#logistic_reg_idf = LogisticRegression(multi_class="auto", max_iter=1000, random_state=0)
+#params = {'C':np.logspace(-4, 4, 20),
+#          'solver':["lbfgs", "liblinear"]}
+#grid_idf = GridSearchCV(estimator=logistic_reg_idf, param_grid=params, n_jobs=5, cv=5, verbose=10, scoring='f1_macro', return_train_score=True)
+#grid_idf.fit(X_train_idf, Y_train)
+#grid_idf.best_params_
+
+#%%
+
+#grid_idf.best_score_
+
+#%%
+
+#preds = grid.decision_function(X_test)
+
+#%%
+
+#preds = preds.argmax(axis=1)
+
+#%%
+
+#original_labels = le.inverse_transform(preds)
+
+#%%
+
+#original_labels
+
+#%%
+
+original_labels = le.inverse_transform(preds)
+df = pd.DataFrame()
+df['id'] = test_df['id']
+df['Target'] = original_labels
+df.head()
+
+#%%
+
+with open('preds_final.csv', 'w') as csv_file:
+  df.to_csv(csv_file, header=True)
+
+#%% md
+
+Hashing Vectorizer - Commented out due to lower performance
+
+#%%
+
+#hash=HashingVectorizer(analyzer=str.split, lowercase=True, strip_accents=None, n_features=100000)
+#X_train_hash = hash.fit_transform(train_corpus)
+#X_test_hash = hash.transform(test_corpus)
+
+#%% md
+
+Logistic Regression Grid Search for Hashing Vectorizer
+
+#%%
+
+#logistic_reg_hash = LogisticRegression(multi_class="auto", max_iter=1000, penalty='l2', random_state=0)
+#params = {'C':np.logspace(-4, 4, 20),
+#          'solver':["lbfgs", "liblinear"]}
+#grid_hash = GridSearchCV(estimator=logistic_reg_hash, param_grid=params, n_jobs=5, cv=5, verbose=10, scoring='f1_macro', return_train_score=True)
+#grid_hash.fit(X_train_hash, Y_train)
+#grid_hash.best_params_
+
+#%%
+
+#grid_hash.best_score_
+
+#%%
+
+#preds_hash = grid_hash.decision_function(X_test_hash)
+#preds_hash = preds_hash.argmax(axis=1)
+#original_labels = le.inverse_transform(preds_hash)
+
+#%%
+
+#df = pd.DataFrame()
+#df['id'] = test_df['id']
+#df['Target'] = original_labels
+#df.head()
+#with open('preds_hash.csv', 'w') as csv_file:
+#  df.to_csv(csv_file, header=True)
+
+#%% md
+
+XG Boost Classifier - Commented due to overfitting
+
+#%%
+
+"""
+dtrain = xgb.DMatrix(X_train, label=Y_train)
+dtest = xgb.DMatrix(X_test)
+param = {
+'max_depth': 3,  # the maximum depth of each tree
+'eta': 0.3,  # the training step for each iteration
+'silent': 0,  # logging mode - quiet
+'objective': 'multi:softmax', 
+'min_child_weight': 1, # error evaluation for multiclass training
+'num_class': 3}  # the number of classes that exist in this datset
+num_round = 70
+bst = xgb.train(param, dtrain, num_round)
+train_preds = bst.predict(dtrain)
+print(f1_score(Y_train, train_preds, average='macro'))
+xgb_preds = bst.predict(dtest)
+xgb_preds = [int(pred) for pred in xgb_preds]
+#print(preds)
+original_test_labels = le.inverse_transform(xgb_preds)
+original_test_labels
+""" 
+
+#%%
+
+#df = pd.DataFrame()
+#df['id'] = test_df['id']
+#df['Target'] = original_test_labels
+#df.head()
+
+#%%
+
+#with open('preds.csv', 'w') as csv_file:
+#  df.to_csv(csv_file, header=True)
+
+#%% md
+
+Grid Search Parameters for XGBoost
+
+#%%
+
+"""
+gridsearch_params = [
+    (max_depth, min_child_weight)
+    for max_depth in range(4,9)
+    for min_child_weight in range(1,8)
+]
+"""
+
+#%% md
+
+Custom Eval function for XGBoost
+
+#%%
+
+def f1_eval(y_pred, dtrain):
+    y_true = dtrain.get_label()
+    err = 1-f1_score(y_true, np.round(y_pred), average='macro')
+    return 'f1_err', err
+
+#%% md
+
+Grid Search for XGBoost
+
+#%%
+
+"""
+# Define initial best params and MAE
+min_mae = float("Inf")
+best_params = None
+for max_depth, min_child_weight in gridsearch_params:
+    print("CV with max_depth={}, min_child_weight={}".format(
+                             max_depth,
+                             min_child_weight))
+    # Update our parameters
+    params['max_depth'] = max_depth
+    params['min_child_weight'] = min_child_weight
+    params['num_class']  = 3
+    # Run CV
+    cv_results = xgb.cv(
+        params,
+        dtrain,
+        num_boost_round=999,
+        seed=42,
+        nfold=5,
+        #metrics={'f1_err'}
+        feval = f1_eval,
+        early_stopping_rounds=10
+    )
+    # Update best MAE
+    mean_mae = cv_results['test-f1_err-mean'].min()
+    boost_rounds = cv_results['test-f1_err-mean'].argmin()
+    print("\tMAE {} for {} rounds".format(1-mean_mae, boost_rounds))
+    if mean_mae < min_mae:
+        min_mae = mean_mae
+        best_params = (max_depth,min_child_weight)
+print("Best params: {}, {}, MAE: {}".format(best_params[0], best_params[1], min_mae))
+"""
+
+#%% md
+
+1.	How you pre-process data?
+For pre-processing functions were written to remove special characters, @, https and punctuations. After cleaning the text, we normalized the data by removing extra whitespaces and performing contractions on words.
+
+2.	Tokenization approach 
+All tokenization approaches taught in class were evaluated. But Spacy tokenization gave best performance out of them.
+
+3.	Did using stemming, lemmatization improve results?
+Yes, stemming and lemmatization were used. Spacy lemmatizer gave good results and was implemented. Stemming was not used since it gave bad results.
+
+4.	Did stop words improve results ? What stop word approaches you try – your own, library or customized stop list from library.
+Stop words did not improve the result. NLTK stop words with no and not removed from them were used as stop-words.
+
+5.	What vectorization approach you used- bag of words, n-gram bag of words, tfidf etc.
+Count Vectorization was implemented for vectorization. Hash vectorizer was implemented but gave poor results. Hence, we chose count vectorizer
+
+6.	In what order you applied above steps. 
+•	Preprocessing the data 
+•	Tokenization 
+•	Lemmatization-Spacy lemmatizer
+•	Count Vectorizer
+•	Grid Search for finding best model hyper-parameters
+•	Model Evaluation
+
+7.	Did your approach require you to use customized steps? 
+For contractions I used English contractions list downloaded from Wikipedia and wrote my own regex-based text cleaner for pre-processing the data.
+
+8.	Logistic Regression , Naïve Bayes and XGBoost all the three models were evaluated, and Logistic regression gave a better test macro f1-score of 0.73680.
+
+	References: (https://medium.com/swlh/text-normalization-7ecc8e084e31) 
+	Blogs: Towards data science ,Class Notes and Slides
+
+
+#%%
+
+
