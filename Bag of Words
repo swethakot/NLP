@@ -1,0 +1,2369 @@
+#%%
+
+gpu_info = !nvidia-smi
+gpu_info = '\n'.join(gpu_info)
+if gpu_info.find('failed') >= 0:
+  print('Select the Runtime > "Change runtime type" menu to enable a GPU accelerator, ')
+  print('and then re-execute this cell.')
+else:
+  print(gpu_info)
+
+#%%
+
+import numpy as np
+import pandas as pd
+import torch
+
+
+#%% md
+
+#Data Pre-Processing
+
+#%%
+
+train = pd.read_csv('train.csv')
+public = pd.read_csv('public.csv')
+private = pd.read_csv('private.csv')
+train.head()
+
+#%%
+
+train = train[['price', 'description', 'variety', 'region_1', 'points']]
+public = public[['price', 'description', 'variety', 'region_1', 'points']]
+private = private[['price', 'description',  'variety', 'region_1', 'points']]
+
+#%%
+
+train = train.head(round(0.1 * len(train)))
+
+#%%
+
+train = train.dropna()
+train = train.reset_index(drop=True)
+train_size = len(train)
+
+public = public.dropna()
+public = public.reset_index(drop=True)
+public_size = len(public)
+
+private = private.dropna()
+private = private.reset_index(drop=True)
+private_size = len(private)
+
+#%%
+
+train_noreviews = train[['price', 'variety', 'region_1', 'points']]
+public_noreviews = public[['price', 'variety', 'region_1', 'points']]
+private_noreviews = private[['price', 'variety', 'region_1', 'points']]
+
+#%%
+
+print(train_size, public_size, private_size)
+
+#%%
+
+train_noreviews.head()
+
+#%%
+
+combined_df = pd.concat([train_noreviews, public_noreviews, private_noreviews], ignore_index=True)
+combined_df.shape
+
+#%%
+
+r1 = pd.get_dummies(combined_df.region_1, prefix='r1')
+v = pd.get_dummies(combined_df.variety, prefix='v')
+
+#%%
+
+combined_df = combined_df.drop('region_1', axis=1)
+combined_df = combined_df.join(r1)
+combined_df = combined_df.drop('variety', axis=1)
+combined_df = combined_df.join(v)
+
+#%%
+
+combined_df.head()
+
+#%%
+
+train_noreviews = combined_df.loc[0:train_size-1]
+public_noreviews = combined_df.loc[train_size:public_size + train_size-1]
+private_noreviews = combined_df.loc[train_size+public_size:train_size+public_size+private_size-1]
+
+#%%
+
+public_noreviews = public_noreviews.reset_index(drop=True)
+private_noreviews = private_noreviews.reset_index(drop=True)
+
+#%% md
+
+#Model Training on features excluding review data
+
+#%%
+
+train_y = train_noreviews.points.to_numpy()
+train_x = train_noreviews.loc[:, train_noreviews.columns != 'points']
+private_y = private_noreviews.points.to_numpy()
+private_x = private_noreviews.loc[:, private_noreviews.columns != 'points']
+public_y = public_noreviews.points.to_numpy()
+public_x = public_noreviews.loc[:, public_noreviews.columns != 'points']
+train_x = train_x.to_numpy()
+public_x = public_x.to_numpy()
+private_x = private_x.to_numpy()
+
+#%%
+
+# separate into training and testing set
+from sklearn.model_selection import train_test_split
+X_train_valid, X_test, y_train_valid, y_test = train_test_split(
+    train_x,  # predictors
+    train_y,  # target
+    test_size=0.2,  # percentage of obs in test set
+    random_state=0)  # seed to ensure reproducibility
+
+#%%
+
+# separate into training and testing set
+from sklearn.model_selection import train_test_split
+X_train, X_valid, y_train, y_valid = train_test_split(
+    X_train_valid,  # predictors
+    y_train_valid,  # target
+    test_size=0.2,  # percentage of obs in test set
+    random_state=0)  # seed to ensure reproducibility
+
+#%%
+
+X_train = torch.tensor(X_train).float()
+y_train=torch.tensor(y_train).float().reshape(-1, 1)
+X_valid = torch.tensor(X_valid).float()
+y_valid=torch.tensor(y_valid).float()
+X_test = torch.tensor(X_test).float()
+y_test=torch.tensor(y_test).float().reshape(-1, 1)
+
+#%%
+
+from torch.utils import data
+train_dataset = data.TensorDataset(X_train,y_train)
+train_dataset = data.TensorDataset(X_train,y_train)
+train_dataset = data.TensorDataset(X_train,y_train)
+valid_dataset = data.TensorDataset(X_valid,y_valid)
+test_dataset = data.TensorDataset(X_test,y_test)
+
+
+#%%
+
+batch_size=50
+train_loader= torch.utils.data.DataLoader(dataset=train_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=True,
+                                        num_workers=4)
+
+#%%
+
+valid_loader= torch.utils.data.DataLoader(dataset=valid_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+#%%
+
+test_loader= torch.utils.data.DataLoader(dataset=test_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+#%%
+
+import torch
+from torch.autograd import Variable
+class linearRegression(torch.nn.Module):
+    def __init__(self, inputSize, outputSize):
+        super(linearRegression, self).__init__()
+        self.linear = torch.nn.Linear(inputSize, outputSize)
+
+    def forward(self, x):
+        out = self.linear(x)
+        return out
+
+#%%
+
+model= linearRegression(train_x.shape[1], 1)
+
+#%%
+
+import torch.nn.functional as F
+import torch.nn as nn
+# STEP 5: INSTANTIATE LOSS CLASS
+criterion = nn.MSELoss(reduction='mean')
+
+# STEP 6: INSTANTIATE OPTIMIZER CLASS
+learning_rate = 0.05
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-2)
+
+#%%
+
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+print(device)
+model.to(device)
+
+#%%
+
+!pip install torch-lr-finder
+from torch_lr_finder import LRFinder
+lr_finder = LRFinder(model, optimizer, criterion, device=device)
+lr_finder.range_test(train_loader=train_loader, val_loader=valid_loader, end_lr=1.5, num_iter=100, step_mode="exp")
+
+#%%
+
+lr_finder.plot()
+lr_finder.reset()
+
+#%%
+
+criterion = nn.MSELoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=5.28E-02, weight_decay=1e-2)
+
+#%%
+
+from datetime import datetime
+# STEP 7: TRAIN THE MODEL
+patience = 10
+
+epochs=100
+
+counter_early_stop = 0
+best_score = None
+early_stop = False
+valid_loss_min = np.Inf
+delta=0
+path = 'early_stop_linreg_no_reviews_baseline.pt'
+
+train_losses= []
+valid_losses= []
+
+
+
+for epoch in range(epochs):
+  
+  t0= datetime.now()
+  train_loss=[]  
+  model.train()
+  for input,targets in train_loader:
+    # load input and output to GPU
+    input = input.to(device)
+    targets= targets.to(device)
+    
+    # forward pass
+    output= model(input)
+    loss=criterion(output,targets)
+
+    # set gradients to zero 
+    optimizer.zero_grad()
+
+    # backward pass
+    loss.backward()
+    optimizer.step()
+    train_loss.append(loss.item())
+  
+  train_loss=np.mean(train_loss)
+      
+  valid_loss=[]
+  model.eval()
+  with torch.no_grad():
+    for input,targets in valid_loader:
+      # load input and output to GPU
+      input = input.to(device)
+      targets= targets.to(device)
+      
+      # forward pass
+      output= model(input)
+      loss=criterion(output,targets)
+      valid_loss.append(loss.item())
+
+    valid_loss=np.mean(valid_loss)
+  
+  # save Losses
+  train_losses.append(train_loss)
+  valid_losses.append(valid_loss)
+  dt= datetime.now()-t0
+  print(f'Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.4f}    Valid Loss: {valid_loss:.4f}, Duration: {dt}')
+
+  ## Early Stopping
+
+  score = -valid_loss
+
+  if best_score is None:
+      best_score = score
+      print(f'Validation loss decreased ({valid_loss_min:.6f} --> {valid_loss:.6f}).  Saving model ...')
+      torch.save(model.state_dict(), path)
+      valid_loss_min = valid_loss
+      
+  elif score < best_score + delta:
+      counter_early_stop += 1
+      print(f'Early Stopping counter: {counter_early_stop} out of {patience}')
+      if counter_early_stop >= patience:
+          early_stop = True
+  else:
+      best_score = score
+      print(f'Validation loss decreased ({valid_loss_min:.6f} --> {valid_loss:.6f}).  Saving model ...')
+      torch.save(model.state_dict(), path)
+      counter_early_stop = 0
+      valid_loss_min = valid_loss
+
+  if early_stop:
+    print("Early stopping")
+    break
+  
+  
+
+#%%
+
+import matplotlib.pyplot as plt
+# visualize the loss as the network trained
+fig = plt.figure(figsize=(10,8))
+plt.plot(range(1,len(train_losses)+1),train_losses, label='Training Loss')
+plt.plot(range(1,len(valid_losses)+1),valid_losses,label='Validation Loss')
+
+# find position of lowest validation loss
+minposs = valid_losses.index(min(valid_losses))+1 
+plt.axvline(minposs, linestyle='--', color='r',label='Early Stopping Checkpoint')
+
+plt.xlabel('epochs')
+plt.ylabel('loss')
+plt.ylim(0, 100) # consistent scale
+plt.xlim(0, len(train_losses)+1) # consistent scale
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+fig.savefig('loss_plot.png', bbox_inches='tight')
+
+
+
+#%%
+
+model = linearRegression(train_x.shape[1], 1)
+model.to(device)
+model.load_state_dict(torch.load(path))
+
+#%%
+
+# Accuracy- write a function to get accuracy
+# use this function to get train/test accuracy and print accuracy
+def get_mseloss(train_loader, valid_loader, test_loader, public_loader, private_loader, model):
+  model.eval()
+  with torch.no_grad():
+    train_loss = list()
+    valid_loss = list()
+    test_loss = list()
+    public_loss = list()
+    private_loss = list()
+
+    for input, targets in train_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      train_loss.extend(F.mse_loss(output, targets, reduction='none'))
+      
+    for input, targets in valid_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      valid_loss.extend(F.mse_loss(output, targets, reduction='none'))
+      
+    for input, targets in test_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      test_loss.extend(F.mse_loss(output, targets, reduction='none'))
+
+    for input, targets in public_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      public_loss.extend(F.mse_loss(output, targets, reduction='none'))
+    
+    for input, targets in private_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      private_loss.extend(F.mse_loss(output, targets, reduction='none'))
+    
+    train_loss = torch.cat(train_loss, dim=0).mean().item()
+    valid_loss = torch.cat(valid_loss, dim=0).mean().item()
+    test_loss = torch.cat(test_loss, dim=0).mean().item()
+    public_loss = torch.cat(public_loss, dim=0).mean().item()
+    private_loss = torch.cat(private_loss, dim=0).mean().item()
+    
+    return train_loss, valid_loss, test_loss, public_loss, private_loss
+
+#%%
+
+X_public = torch.tensor(public_x).float()
+y_public = torch.tensor(public_y).float().reshape(-1, 1)
+X_private = torch.tensor(private_x).float()
+y_private = torch.tensor(private_y).float().reshape(-1, 1)
+public_dataset = data.TensorDataset(X_public,y_public)
+private_dataset = data.TensorDataset(X_private,y_private)
+public_loader= torch.utils.data.DataLoader(dataset=public_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+private_loader= torch.utils.data.DataLoader(dataset=public_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+tr_loss, vl_loss, tst_loss, pb_loss, pvt_loss = get_mseloss(train_loader, valid_loader, test_loader, public_loader, private_loader, model)
+print("Train Loss: ", tr_loss, ", Valid Loss: ", vl_loss, ", Test Loss: ", tst_loss, ", Public Loss: ", pb_loss, ", Private Loss: ", pvt_loss)
+
+#%% md
+
+#No Reviews Results: 
+Public Loss:  8.578287124633789 , Private Loss:  8.578287124633789
+
+#%% md
+
+#Model training using Reviews 
+
+
+
+#%% md
+
+Text Pre-Processing (Normalization, Lemmatization, Stop-Word Removal)
+
+#%%
+
+import re
+import spacy
+!pip install colorama
+from colorama import Fore, Back, Style
+
+nlp = spacy.load('en_core_web_sm')
+def normalize_text(text):
+    tm1 = re.sub('<pre>.*?</pre>', '', text, flags=re.DOTALL)
+    tm2 = re.sub('<code>.*?</code>', '', tm1, flags=re.DOTALL)
+    tm3 = re.sub('<[^>]+>©', '', tm1, flags=re.DOTALL)
+    return tm3.replace("\n", "")
+
+#%%
+
+train['description'] = train['description'].apply(normalize_text)
+public['description'] = public['description'].apply(normalize_text)
+private['description'] = private['description'].apply(normalize_text)
+
+#%%
+
+# Stop words
+spacy_stopwords = spacy.lang.en.stop_words.STOP_WORDS
+newStopWords = ['fruit', "Drink", "black", 'wine', 'drink']
+spacy_stopwords.update(newStopWords)
+doc = nlp(train["description"][3])
+review = str(" ".join([i.lemma_ for i in doc]))
+doc = nlp(review)
+spacy.displacy.render(doc, style='ent', jupyter=True)
+
+#%%
+
+import string
+from spacy.lang.en.stop_words import STOP_WORDS
+from spacy.lang.en import English
+punctuations = string.punctuation
+stopwords = STOP_WORDS
+
+#%%
+
+# POS tagging
+for i in nlp(review):
+    print(i, Fore.GREEN + "=>",i.pos_)
+
+#%%
+
+# Parser for reviews
+parser = English()
+def spacy_tokenizer(sentence):
+    mytokens = parser(sentence)
+    mytokens = [ word.lemma_.lower().strip() if word.lemma_ != "-PRON-" else word.lower_ for word in mytokens ]
+    mytokens = [ word for word in mytokens if word not in stopwords and word not in punctuations ]
+    mytokens = " ".join([i for i in mytokens])
+    return mytokens
+
+#%%
+
+from tqdm import tqdm
+tqdm.pandas()
+train["description"] = train["description"].progress_apply(spacy_tokenizer)
+train["description"] = private["description"].progress_apply(spacy_tokenizer)
+train["description"] = private["description"].progress_apply(spacy_tokenizer)
+
+#%% md
+
+#Bag of Words Features - Count Vectorizer
+
+#%%
+
+from sklearn.feature_extraction.text import CountVectorizer
+vectorizer = CountVectorizer(min_df=5, max_df=0.9, stop_words='english', lowercase=True, token_pattern='[a-zA-Z\-][a-zA-Z\-]{2,}')
+data_vectorized = vectorizer.fit_transform(train["description"])
+public_vectorized = vectorizer.transform(public["description"])
+private_vectorized = vectorizer.transform(private["description"])
+
+
+#%%
+
+print(vectorizer.vocabulary_)
+
+#%%
+
+data_vectorized = data_vectorized.toarray()
+public_vectorized = public_vectorized.toarray()
+private_vectorized = private_vectorized.toarray()
+
+#%%
+
+train_x_reviews = np.column_stack((train_x, data_vectorized))
+public_x_reviews = np.column_stack((public_x, public_vectorized))
+private_x_reviews = np.column_stack((private_x, private_vectorized))
+train_x_reviews.shape
+
+#%%
+
+# separate into training and testing set
+from sklearn.model_selection import train_test_split
+X_train_valid, X_test, y_train_valid, y_test = train_test_split(
+    train_x_reviews,  # predictors
+    train_y,  # target
+    test_size=0.2,  # percentage of obs in test set
+    random_state=0)  # seed to ensure reproducibility
+
+#%%
+
+# separate into training and testing set
+from sklearn.model_selection import train_test_split
+X_train, X_valid, y_train, y_valid = train_test_split(
+    X_train_valid,  # predictors
+    y_train_valid,  # target
+    test_size=0.2,  # percentage of obs in test set
+    random_state=0)  # seed to ensure reproducibility
+
+#%%
+
+X_train = torch.tensor(X_train).float()
+y_train=torch.tensor(y_train).float().reshape(-1, 1)
+X_valid = torch.tensor(X_valid).float()
+y_valid=torch.tensor(y_valid).float()
+X_test = torch.tensor(X_test).float()
+y_test=torch.tensor(y_test).float().reshape(-1, 1)
+
+#%%
+
+from torch.utils import data
+train_dataset = data.TensorDataset(X_train,y_train)
+valid_dataset = data.TensorDataset(X_valid,y_valid)
+test_dataset = data.TensorDataset(X_test,y_test)
+
+#%%
+
+batch_size=50
+train_loader= torch.utils.data.DataLoader(dataset=train_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=True,
+                                        num_workers=4)
+
+#%%
+
+valid_loader= torch.utils.data.DataLoader(dataset=valid_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+#%%
+
+test_loader= torch.utils.data.DataLoader(dataset=test_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+#%%
+
+model= linearRegression(train_x_reviews.shape[1], 1)
+
+#%%
+
+import torch.nn.functional as F
+import torch.nn as nn
+# STEP 5: INSTANTIATE LOSS CLASS
+criterion = nn.MSELoss(reduction='mean')
+
+# STEP 6: INSTANTIATE OPTIMIZER CLASS
+learning_rate = 0.05
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-2)
+
+#%%
+
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+print(device)
+model.to(device)
+
+#%%
+
+!pip install torch-lr-finder
+from torch_lr_finder import LRFinder
+lr_finder = LRFinder(model, optimizer, criterion, device=device)
+lr_finder.range_test(train_loader=train_loader, val_loader=valid_loader, end_lr=1.5, num_iter=100, step_mode="exp")
+
+#%%
+
+lr_finder.plot()
+lr_finder.reset()
+
+#%%
+
+criterion = nn.MSELoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=5.26E-02, weight_decay=1e-2)
+
+#%%
+
+from datetime import datetime
+# STEP 7: TRAIN THE MODEL
+patience = 10
+
+epochs=100
+
+counter_early_stop = 0
+best_score = None
+early_stop = False
+valid_loss_min = np.Inf
+delta=0
+path1 = 'early_stop_linreg_baseline.pt'
+
+train_losses= []
+valid_losses= []
+
+
+
+for epoch in range(epochs):
+  
+  t0= datetime.now()
+  train_loss=[]  
+  model.train()
+  for input,targets in train_loader:
+    # load input and output to GPU
+    input = input.to(device)
+    targets= targets.to(device)
+    
+    # forward pass
+    output= model(input)
+    loss=criterion(output,targets)
+
+    # set gradients to zero 
+    optimizer.zero_grad()
+
+    # backward pass
+    loss.backward()
+    optimizer.step()
+    train_loss.append(loss.item())
+  
+  train_loss=np.mean(train_loss)
+      
+  valid_loss=[]
+  model.eval()
+  with torch.no_grad():
+    for input,targets in valid_loader:
+      # load input and output to GPU
+      input = input.to(device)
+      targets= targets.to(device)
+      
+      # forward pass
+      output= model(input)
+      loss=criterion(output,targets)
+      valid_loss.append(loss.item())
+
+    valid_loss=np.mean(valid_loss)
+  
+  # save Losses
+  train_losses.append(train_loss)
+  valid_losses.append(valid_loss)
+  dt= datetime.now()-t0
+  print(f'Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.4f}    Valid Loss: {valid_loss:.4f}, Duration: {dt}')
+
+  ## Early Stopping
+
+  score = -valid_loss
+
+  if best_score is None:
+      best_score = score
+      print(f'Validation loss decreased ({valid_loss_min:.6f} --> {valid_loss:.6f}).  Saving model ...')
+      torch.save(model.state_dict(), path1)
+      valid_loss_min = valid_loss
+      
+  elif score < best_score + delta:
+      counter_early_stop += 1
+      print(f'Early Stopping counter: {counter_early_stop} out of {patience}')
+      if counter_early_stop >= patience:
+          early_stop = True
+  else:
+      best_score = score
+      print(f'Validation loss decreased ({valid_loss_min:.6f} --> {valid_loss:.6f}).  Saving model ...')
+      torch.save(model.state_dict(), path1)
+      counter_early_stop = 0
+      valid_loss_min = valid_loss
+
+  if early_stop:
+    print("Early stopping")
+    break
+  
+  
+
+#%%
+
+import matplotlib.pyplot as plt
+# visualize the loss as the network trained
+fig = plt.figure(figsize=(10,8))
+plt.plot(range(1,len(train_losses)+1),train_losses, label='Training Loss')
+plt.plot(range(1,len(valid_losses)+1),valid_losses,label='Validation Loss')
+
+# find position of lowest validation loss
+minposs = valid_losses.index(min(valid_losses))+1 
+plt.axvline(minposs, linestyle='--', color='r',label='Early Stopping Checkpoint')
+
+plt.xlabel('epochs')
+plt.ylabel('loss')
+plt.ylim(0, 100) # consistent scale
+plt.xlim(0, len(train_losses)+1) # consistent scale
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+fig.savefig('loss_plot.png', bbox_inches='tight')
+
+
+
+#%%
+
+model = linearRegression(train_x_reviews.shape[1], 1)
+model.to(device)
+model.load_state_dict(torch.load(path1))
+
+#%%
+
+# Accuracy- write a function to get accuracy
+# use this function to get train/test accuracy and print accuracy
+def get_mseloss(train_loader, valid_loader, test_loader, public_loader, private_loader, model):
+  model.eval()
+  with torch.no_grad():
+    train_loss = list()
+    valid_loss = list()
+    test_loss = list()
+    public_loss = list()
+    private_loss = list()
+
+    for input, targets in train_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      train_loss.extend(F.mse_loss(output, targets, reduction='none'))
+      
+    for input, targets in valid_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      valid_loss.extend(F.mse_loss(output, targets, reduction='none'))
+      
+    for input, targets in test_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      test_loss.extend(F.mse_loss(output, targets, reduction='none'))
+
+    for input, targets in public_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      public_loss.extend(F.mse_loss(output, targets, reduction='none'))
+    
+    for input, targets in private_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      private_loss.extend(F.mse_loss(output, targets, reduction='none'))
+    
+    train_loss = torch.cat(train_loss, dim=0).mean().item()
+    valid_loss = torch.cat(valid_loss, dim=0).mean().item()
+    test_loss = torch.cat(test_loss, dim=0).mean().item()
+    public_loss = torch.cat(public_loss, dim=0).mean().item()
+    private_loss = torch.cat(private_loss, dim=0).mean().item()
+
+    return train_loss, valid_loss, test_loss, public_loss, private_loss
+
+#%%
+
+X_public = torch.tensor(public_x_reviews).float()
+y_public = torch.tensor(public_y).float().reshape(-1, 1)
+X_private = torch.tensor(private_x_reviews).float()
+y_private = torch.tensor(private_y).float().reshape(-1, 1)
+public_dataset = data.TensorDataset(X_public,y_public)
+private_dataset = data.TensorDataset(X_private,y_private)
+public_loader= torch.utils.data.DataLoader(dataset=public_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+private_loader= torch.utils.data.DataLoader(dataset=public_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+tr_loss, vl_loss, tst_loss, pb_loss, pvt_loss = get_mseloss(train_loader, valid_loader, test_loader, public_loader, private_loader, model)
+print("Train Loss: ", tr_loss, ", Valid Loss: ", vl_loss, ", Test Loss: ", tst_loss, ", Public Loss: ", pb_loss, ", Private Loss: ", pvt_loss)
+
+#%% md
+
+#BOW Features Results 
+Public Loss:  12.007556915283203 , Private Loss:  12.007556915283203
+
+#%% md
+
+#Part 2: Word2Vec Implementation
+
+#%%
+
+from gensim.models.word2vec import Word2Vec
+import gensim.downloader as api
+
+
+#%%
+
+model = api.load('word2vec-google-news-300')  # download the corpus and return it opened as an iterable
+
+#%%
+
+train['description'].head(3)[0]
+
+#%%
+
+def word_tokenize(text):
+  tokens = text.split(" ")
+  return tokens
+
+def document_vector(word2vec_model, doc):
+    # remove out-of-vocabulary words
+    doc = [word for word in doc if word in word2vec_model.vocab]
+    if doc != []:
+      return np.mean(word2vec_model[doc], axis=0)
+    else:
+      return np.zeros(300)
+
+# Our earlier preprocessing was done when we were dealing only with word vectors
+# Here, we need each document to remain a document 
+def preprocess(text):
+    text = text.lower()
+    doc = word_tokenize(text)
+    doc = [word for word in doc if word not in stopwords]
+    doc = [word for word in doc if word.isalpha()] 
+    return doc
+
+# Function that will help us drop documents that have no word vectors in word2vec
+def has_vector_representation(word2vec_model, doc):
+    """check if at least one word of the document is in the
+    word2vec dictionary"""
+    return not all(word not in word2vec_model.vocab for word in doc)
+
+# Filter out documents
+def filter_docs(corpus, texts, condition_on_doc):
+    """
+    Filter corpus and texts given the function condition_on_doc which takes a doc. The document doc is kept if condition_on_doc(doc) is true.
+    """
+    number_of_docs = len(corpus)
+
+    if texts is not None:
+        texts = [text for (text, doc) in zip(texts, corpus)
+                 if condition_on_doc(doc)]
+
+    corpus = [doc for doc in corpus if condition_on_doc(doc)]
+
+    print("{} docs removed".format(number_of_docs - len(corpus)))
+
+    return (corpus, texts)
+
+#%%
+
+# Preprocess the corpus
+corpus = [preprocess(word) for word in train.description]
+
+print(len(corpus))
+# Remove docs that don't include any words in W2V's vocab
+corpus, _ = filter_docs(corpus, None, lambda doc: has_vector_representation(model, doc))
+
+print(len(corpus))
+# Filter out any empty docs
+corpus, _ = filter_docs(corpus, None, lambda doc: (len(doc) != 0))
+x = []
+for doc in corpus: # append the vector for each document
+    x.append(document_vector(model, doc))
+    
+X = np.array(x) # list to array
+
+#%%
+
+# Preprocess the corpus
+public_corpus = [preprocess(word) for word in public.description]
+
+print(len(public_corpus))
+# Remove docs that don't include any words in W2V's vocab
+#public_corpus, _ = filter_docs(public_corpus, None, lambda doc: has_vector_representation(model, doc))
+
+print(len(public_corpus))
+# Filter out any empty docs
+#public_corpus, _ = filter_docs(public_corpus, None, lambda doc: (len(doc) != 0))
+x_pb = []
+for doc in public_corpus: # append the vector for each document
+    x_pb.append(document_vector(model, doc))
+    
+X_pb = np.array(x_pb) # list to array
+X_pb.shape
+
+#%%
+
+# Preprocess the corpus
+pvt_corpus = [preprocess(word) for word in private.description]
+
+print(len(pvt_corpus))
+# Remove docs that don't include any words in W2V's vocab
+pvt_corpus, _ = filter_docs(pvt_corpus, None, lambda doc: has_vector_representation(model, doc))
+
+print(len(pvt_corpus))
+# Filter out any empty docs
+pvt_corpus, _ = filter_docs(pvt_corpus, None, lambda doc: (len(doc) != 0))
+x_pvt = []
+for doc in pvt_corpus: # append the vector for each document
+    x_pvt.append(document_vector(model, doc))
+    
+X_pvt = np.array(x_pvt) # list to array
+
+#%%
+
+train_x_word2vec = np.column_stack((train_x, X))
+public_x_word2vec = np.column_stack((public_x, X_pb))
+private_x_word2vec = np.column_stack((private_x, X_pvt))
+
+#%%
+
+train_x_word2vec.shape
+
+#%%
+
+# separate into training and testing set
+from sklearn.model_selection import train_test_split
+X_train_valid, X_test, y_train_valid, y_test = train_test_split(
+    train_x_word2vec,  # predictors
+    train_y,  # target
+    test_size=0.2,  # percentage of obs in test set
+    random_state=0)  # seed to ensure reproducibility
+
+#%%
+
+# separate into training and testing set
+from sklearn.model_selection import train_test_split
+X_train, X_valid, y_train, y_valid = train_test_split(
+    X_train_valid,  # predictors
+    y_train_valid,  # target
+    test_size=0.2,  # percentage of obs in test set
+    random_state=0)  # seed to ensure reproducibility
+
+#%%
+
+X_train = torch.tensor(X_train).float()
+y_train=torch.tensor(y_train).float().reshape(-1, 1)
+X_valid = torch.tensor(X_valid).float()
+y_valid=torch.tensor(y_valid).float()
+X_test = torch.tensor(X_test).float()
+y_test=torch.tensor(y_test).float().reshape(-1, 1)
+
+#%%
+
+from torch.utils import data
+train_dataset = data.TensorDataset(X_train,y_train)
+valid_dataset = data.TensorDataset(X_valid,y_valid)
+test_dataset = data.TensorDataset(X_test,y_test)
+
+#%%
+
+batch_size=50
+train_loader= torch.utils.data.DataLoader(dataset=train_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=True,
+                                        num_workers=4)
+
+#%%
+
+valid_loader= torch.utils.data.DataLoader(dataset=valid_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+#%%
+
+test_loader= torch.utils.data.DataLoader(dataset=test_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+#%%
+
+model= linearRegression(train_x_word2vec.shape[1], 1)
+
+#%%
+
+import torch.nn.functional as F
+import torch.nn as nn
+# STEP 5: INSTANTIATE LOSS CLASS
+criterion = nn.MSELoss(reduction='mean')
+
+# STEP 6: INSTANTIATE OPTIMIZER CLASS
+learning_rate = 0.05
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-2)
+
+#%%
+
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+print(device)
+model.to(device)
+
+#%%
+
+!pip install torch-lr-finder
+from torch_lr_finder import LRFinder
+lr_finder = LRFinder(model, optimizer, criterion, device=device)
+lr_finder.range_test(train_loader=train_loader, val_loader=valid_loader, end_lr=1.5, num_iter=100, step_mode="exp")
+
+#%%
+
+lr_finder.plot()
+lr_finder.reset()
+
+#%%
+
+criterion = nn.MSELoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=5.26E-02, weight_decay=1e-2)
+
+#%%
+
+from datetime import datetime
+# STEP 7: TRAIN THE MODEL
+patience = 10
+
+epochs=100
+
+counter_early_stop = 0
+best_score = None
+early_stop = False
+valid_loss_min = np.Inf
+delta=0
+path2 = 'early_stop_linreg_word2vec_baseline.pt'
+
+train_losses= []
+valid_losses= []
+
+
+
+for epoch in range(epochs):
+  
+  t0= datetime.now()
+  train_loss=[]  
+  model.train()
+  for input,targets in train_loader:
+    # load input and output to GPU
+    input = input.to(device)
+    targets= targets.to(device)
+    
+    # forward pass
+    output= model(input)
+    loss=criterion(output,targets)
+
+    # set gradients to zero 
+    optimizer.zero_grad()
+
+    # backward pass
+    loss.backward()
+    optimizer.step()
+    train_loss.append(loss.item())
+  
+  train_loss=np.mean(train_loss)
+      
+  valid_loss=[]
+  model.eval()
+  with torch.no_grad():
+    for input,targets in valid_loader:
+      # load input and output to GPU
+      input = input.to(device)
+      targets= targets.to(device)
+      
+      # forward pass
+      output= model(input)
+      loss=criterion(output,targets)
+      valid_loss.append(loss.item())
+
+    valid_loss=np.mean(valid_loss)
+  
+  # save Losses
+  train_losses.append(train_loss)
+  valid_losses.append(valid_loss)
+  dt= datetime.now()-t0
+  print(f'Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.4f}    Valid Loss: {valid_loss:.4f}, Duration: {dt}')
+
+  ## Early Stopping
+
+  score = -valid_loss
+
+  if best_score is None:
+      best_score = score
+      print(f'Validation loss decreased ({valid_loss_min:.6f} --> {valid_loss:.6f}).  Saving model ...')
+      torch.save(model.state_dict(), path2)
+      valid_loss_min = valid_loss
+      
+  elif score < best_score + delta:
+      counter_early_stop += 1
+      print(f'Early Stopping counter: {counter_early_stop} out of {patience}')
+      if counter_early_stop >= patience:
+          early_stop = True
+  else:
+      best_score = score
+      print(f'Validation loss decreased ({valid_loss_min:.6f} --> {valid_loss:.6f}).  Saving model ...')
+      torch.save(model.state_dict(), path2)
+      counter_early_stop = 0
+      valid_loss_min = valid_loss
+
+  if early_stop:
+    print("Early stopping")
+    break
+  
+  
+
+#%%
+
+import matplotlib.pyplot as plt
+# visualize the loss as the network trained
+fig = plt.figure(figsize=(10,8))
+plt.plot(range(1,len(train_losses)+1),train_losses, label='Training Loss')
+plt.plot(range(1,len(valid_losses)+1),valid_losses,label='Validation Loss')
+
+# find position of lowest validation loss
+minposs = valid_losses.index(min(valid_losses))+1 
+plt.axvline(minposs, linestyle='--', color='r',label='Early Stopping Checkpoint')
+
+plt.xlabel('epochs')
+plt.ylabel('loss')
+plt.ylim(0, 100) # consistent scale
+plt.xlim(0, len(train_losses)+1) # consistent scale
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+fig.savefig('loss_plot.png', bbox_inches='tight')
+
+
+
+#%%
+
+model = linearRegression(train_x_word2vec.shape[1], 1)
+model.to(device)
+model.load_state_dict(torch.load(path2))
+
+#%%
+
+# Accuracy- write a function to get accuracy
+# use this function to get train/test accuracy and print accuracy
+def get_mseloss(train_loader, valid_loader, test_loader, public_loader, private_loader, model):
+  model.eval()
+  with torch.no_grad():
+    train_loss = list()
+    valid_loss = list()
+    test_loss = list()
+    public_loss = list()
+    private_loss = list()
+
+    for input, targets in train_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      train_loss.extend(F.mse_loss(output, targets, reduction='none'))
+      
+    for input, targets in valid_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      valid_loss.extend(F.mse_loss(output, targets, reduction='none'))
+      
+    for input, targets in test_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      test_loss.extend(F.mse_loss(output, targets, reduction='none'))
+
+    for input, targets in public_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      public_loss.extend(F.mse_loss(output, targets, reduction='none'))
+    
+    for input, targets in private_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      private_loss.extend(F.mse_loss(output, targets, reduction='none'))
+    
+    train_loss = torch.cat(train_loss, dim=0).mean().item()
+    valid_loss = torch.cat(valid_loss, dim=0).mean().item()
+    test_loss = torch.cat(test_loss, dim=0).mean().item()
+    public_loss = torch.cat(public_loss, dim=0).mean().item()
+    private_loss = torch.cat(private_loss, dim=0).mean().item()
+
+    return train_loss, valid_loss, test_loss, public_loss, private_loss
+
+#%%
+
+public_x_word2vec.shape
+
+#%%
+
+X_public = torch.tensor(public_x_word2vec).float()
+y_public = torch.tensor(public_y).float().reshape(-1, 1)
+X_private = torch.tensor(private_x_word2vec).float()
+y_private = torch.tensor(private_y).float().reshape(-1, 1)
+public_dataset = data.TensorDataset(X_public,y_public)
+private_dataset = data.TensorDataset(X_private,y_private)
+public_loader= torch.utils.data.DataLoader(dataset=public_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+private_loader= torch.utils.data.DataLoader(dataset=public_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+tr_loss, vl_loss, tst_loss, pb_loss, pvt_loss = get_mseloss(train_loader, valid_loader, test_loader, public_loader, private_loader, model)
+print("Train Loss: ", tr_loss, ", Valid Loss: ", vl_loss, ", Test Loss: ", tst_loss, ", Public Loss: ", pb_loss, ", Private Loss: ", pvt_loss)
+
+#%% md
+
+#Word2Vec Results: 
+Public Loss:  20.826499938964844 , Private Loss:  20.826499938964844
+
+#%% md
+
+#Word2Vec features combined with BOW features
+
+#%%
+
+train_x_cmb_word2vec = np.column_stack((train_x, X, data_vectorized))
+public_x_cmb_word2vec = np.column_stack((public_x, X_pb, public_vectorized))
+private_x_cmb_word2vec = np.column_stack((private_x, X_pvt, private_vectorized))
+
+#%%
+
+train_x_cmb_word2vec.shape
+
+#%%
+
+# separate into training and testing set
+from sklearn.model_selection import train_test_split
+X_train_valid, X_test, y_train_valid, y_test = train_test_split(
+    train_x_cmb_word2vec,  # predictors
+    train_y,  # target
+    test_size=0.2,  # percentage of obs in test set
+    random_state=0)  # seed to ensure reproducibility
+
+#%%
+
+# separate into training and testing set
+from sklearn.model_selection import train_test_split
+X_train, X_valid, y_train, y_valid = train_test_split(
+    X_train_valid,  # predictors
+    y_train_valid,  # target
+    test_size=0.2,  # percentage of obs in test set
+    random_state=0)  # seed to ensure reproducibility
+
+#%%
+
+X_train = torch.tensor(X_train).float()
+y_train=torch.tensor(y_train).float().reshape(-1, 1)
+X_valid = torch.tensor(X_valid).float()
+y_valid=torch.tensor(y_valid).float()
+X_test = torch.tensor(X_test).float()
+y_test=torch.tensor(y_test).float().reshape(-1, 1)
+
+#%%
+
+from torch.utils import data
+train_dataset = data.TensorDataset(X_train,y_train)
+valid_dataset = data.TensorDataset(X_valid,y_valid)
+test_dataset = data.TensorDataset(X_test,y_test)
+
+#%%
+
+batch_size=50
+train_loader= torch.utils.data.DataLoader(dataset=train_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=True,
+                                        num_workers=4)
+
+#%%
+
+valid_loader= torch.utils.data.DataLoader(dataset=valid_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+#%%
+
+test_loader= torch.utils.data.DataLoader(dataset=test_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+#%%
+
+model= linearRegression(train_x_cmb_word2vec.shape[1], 1)
+
+#%%
+
+import torch.nn.functional as F
+import torch.nn as nn
+# STEP 5: INSTANTIATE LOSS CLASS
+criterion = nn.MSELoss(reduction='mean')
+
+# STEP 6: INSTANTIATE OPTIMIZER CLASS
+learning_rate = 0.05
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-2)
+
+#%%
+
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+print(device)
+model.to(device)
+
+#%%
+
+!pip install torch-lr-finder
+from torch_lr_finder import LRFinder
+lr_finder = LRFinder(model, optimizer, criterion, device=device)
+lr_finder.range_test(train_loader=train_loader, val_loader=valid_loader, end_lr=1.5, num_iter=100, step_mode="exp")
+
+#%%
+
+lr_finder.plot()
+lr_finder.reset()
+
+#%%
+
+criterion = nn.MSELoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=5.23E-02, weight_decay=1e-2)
+
+#%%
+
+from datetime import datetime
+# STEP 7: TRAIN THE MODEL
+patience = 10
+
+epochs=100
+
+counter_early_stop = 0
+best_score = None
+early_stop = False
+valid_loss_min = np.Inf
+delta=0
+path3 = 'early_stop_linreg_cmb_word2vec_baseline.pt'
+
+train_losses= []
+valid_losses= []
+
+
+
+for epoch in range(epochs):
+  
+  t0= datetime.now()
+  train_loss=[]  
+  model.train()
+  for input,targets in train_loader:
+    # load input and output to GPU
+    input = input.to(device)
+    targets= targets.to(device)
+    
+    # forward pass
+    output= model(input)
+    loss=criterion(output,targets)
+
+    # set gradients to zero 
+    optimizer.zero_grad()
+
+    # backward pass
+    loss.backward()
+    optimizer.step()
+    train_loss.append(loss.item())
+  
+  train_loss=np.mean(train_loss)
+      
+  valid_loss=[]
+  model.eval()
+  with torch.no_grad():
+    for input,targets in valid_loader:
+      # load input and output to GPU
+      input = input.to(device)
+      targets= targets.to(device)
+      
+      # forward pass
+      output= model(input)
+      loss=criterion(output,targets)
+      valid_loss.append(loss.item())
+
+    valid_loss=np.mean(valid_loss)
+  
+  # save Losses
+  train_losses.append(train_loss)
+  valid_losses.append(valid_loss)
+  dt= datetime.now()-t0
+  print(f'Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.4f}    Valid Loss: {valid_loss:.4f}, Duration: {dt}')
+
+  ## Early Stopping
+
+  score = -valid_loss
+
+  if best_score is None:
+      best_score = score
+      print(f'Validation loss decreased ({valid_loss_min:.6f} --> {valid_loss:.6f}).  Saving model ...')
+      torch.save(model.state_dict(), path3)
+      valid_loss_min = valid_loss
+      
+  elif score < best_score + delta:
+      counter_early_stop += 1
+      print(f'Early Stopping counter: {counter_early_stop} out of {patience}')
+      if counter_early_stop >= patience:
+          early_stop = True
+  else:
+      best_score = score
+      print(f'Validation loss decreased ({valid_loss_min:.6f} --> {valid_loss:.6f}).  Saving model ...')
+      torch.save(model.state_dict(), path3)
+      counter_early_stop = 0
+      valid_loss_min = valid_loss
+
+  if early_stop:
+    print("Early stopping")
+    break
+  
+  
+
+#%%
+
+import matplotlib.pyplot as plt
+# visualize the loss as the network trained
+fig = plt.figure(figsize=(10,8))
+plt.plot(range(1,len(train_losses)+1),train_losses, label='Training Loss')
+plt.plot(range(1,len(valid_losses)+1),valid_losses,label='Validation Loss')
+
+# find position of lowest validation loss
+minposs = valid_losses.index(min(valid_losses))+1 
+plt.axvline(minposs, linestyle='--', color='r',label='Early Stopping Checkpoint')
+
+plt.xlabel('epochs')
+plt.ylabel('loss')
+plt.ylim(0, 100) # consistent scale
+plt.xlim(0, len(train_losses)+1) # consistent scale
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+fig.savefig('loss_plot.png', bbox_inches='tight')
+
+
+
+#%%
+
+model = linearRegression(train_x_cmb_word2vec.shape[1], 1)
+model.to(device)
+model.load_state_dict(torch.load(path3))
+
+#%%
+
+# Accuracy- write a function to get accuracy
+# use this function to get train/test accuracy and print accuracy
+def get_mseloss(train_loader, valid_loader, test_loader, public_loader, private_loader, model):
+  model.eval()
+  with torch.no_grad():
+    train_loss = list()
+    valid_loss = list()
+    test_loss = list()
+    public_loss = list()
+    private_loss = list()
+
+    for input, targets in train_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      train_loss.extend(F.mse_loss(output, targets, reduction='none'))
+      
+    for input, targets in valid_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      valid_loss.extend(F.mse_loss(output, targets, reduction='none'))
+      
+    for input, targets in test_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      test_loss.extend(F.mse_loss(output, targets, reduction='none'))
+
+    for input, targets in public_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      public_loss.extend(F.mse_loss(output, targets, reduction='none'))
+    
+    for input, targets in private_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      private_loss.extend(F.mse_loss(output, targets, reduction='none'))
+    
+    train_loss = torch.cat(train_loss, dim=0).mean().item()
+    valid_loss = torch.cat(valid_loss, dim=0).mean().item()
+    test_loss = torch.cat(test_loss, dim=0).mean().item()
+    public_loss = torch.cat(public_loss, dim=0).mean().item()
+    private_loss = torch.cat(private_loss, dim=0).mean().item()
+
+    return train_loss, valid_loss, test_loss, public_loss, private_loss
+
+#%%
+
+X_public = torch.tensor(public_x_cmb_word2vec).float()
+y_public = torch.tensor(public_y).float().reshape(-1, 1)
+X_private = torch.tensor(private_x_cmb_word2vec).float()
+y_private = torch.tensor(private_y).float().reshape(-1, 1)
+public_dataset = data.TensorDataset(X_public,y_public)
+private_dataset = data.TensorDataset(X_private,y_private)
+public_loader= torch.utils.data.DataLoader(dataset=public_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+private_loader= torch.utils.data.DataLoader(dataset=public_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+tr_loss, vl_loss, tst_loss, pb_loss, pvt_loss = get_mseloss(train_loader, valid_loader, test_loader, public_loader, private_loader, model)
+print("Train Loss: ", tr_loss, ", Valid Loss: ", vl_loss, ", Test Loss: ", tst_loss, ", Public Loss: ", pb_loss, ", Private Loss: ", pvt_loss)
+
+#%% md
+
+#Word2Vec with BOW results
+ Public Loss:  20.415098190307617 , Private Loss:  20.415098190307617
+ Improvement is minimal to word2vec with added BOW features
+
+#%% md
+
+#Part 3: CBOW Implementation
+
+#%%
+
+corpus = [preprocess(word) for word in train.description]
+pb_corpus = [preprocess(word) for word in public.description]
+pvt_corpus = [preprocess(word) for word in private.description]
+
+vocab = list()
+[vocab.extend(doc) for doc in corpus]
+vocab = set(vocab)
+
+#%%
+
+vocab_size = len(vocab)
+CONTEXT_SIZE = 2  # 2 words to the left, 2 to the right
+EMDEDDING_DIM = 100
+
+#%%
+
+word_to_ix = {word:ix for ix, word in enumerate(vocab)}
+ix_to_word = {ix:word for ix, word in enumerate(vocab)}
+
+data = []
+for doc in corpus:
+  for i in range(2, len(doc) - 2):
+      context = [doc[i - 2], doc[i - 1],
+                doc[i + 1], doc[i + 2]]
+      target = doc[i]
+      data.append((context, target))
+
+#%%
+
+inps = [x[0] for x in data]
+tgts = [x[1] for x in data]
+
+
+#%%
+
+batch_size = 500
+train_loader= torch.utils.data.DataLoader(dataset=data,
+                                        batch_size=batch_size,
+                                        shuffle=True,
+                                        num_workers=4)
+
+#%%
+
+from torch.utils.data import BatchSampler, SequentialSampler
+batch_indices = list(BatchSampler(SequentialSampler(range(len(data))), batch_size=50, drop_last=False))
+
+
+#%%
+
+class CBOW(torch.nn.Module):
+  
+    def __init__(self, vocab_size, embedding_dim):
+        super(CBOW, self).__init__()
+
+        #out: 1 x emdedding_dim
+        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
+        self.linear1 = nn.Linear(embedding_dim, 128)
+        self.activation_function1 = nn.ReLU()
+        
+        #out: 1 x vocab_size
+        self.linear2 = nn.Linear(128, vocab_size)
+        self.activation_function2 = nn.LogSoftmax(dim = -1)
+        
+
+    def forward(self, inputs):
+        embeds = sum(self.embeddings(inputs)).view(1,-1)
+        out = self.linear1(embeds)
+        out = self.activation_function1(out)
+        out = self.linear2(out)
+        out = self.activation_function2(out)
+        return out
+
+    def get_word_emdedding(self, word):
+        word = torch.tensor([word_to_ix[word]])
+        return self.embeddings(word).view(1,-1)
+
+
+#%%
+
+def make_context_vector(context, word_to_ix):
+    idxs = [word_to_ix[w] for w in context]
+    return torch.tensor(idxs, dtype=torch.long)
+
+#%%
+
+import torch.nn as nn
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+print(device)
+model = CBOW(vocab_size, EMDEDDING_DIM).to(device)
+
+loss_function = nn.NLLLoss()
+optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
+
+
+
+#%%
+
+len(data)
+
+#%%
+
+from tqdm import tqdm
+#TRAINING
+for epoch in tqdm(range(5)):
+    count = 0
+    for indices in batch_indices:
+      total_loss = 0
+      for index in indices:
+          context, target = data[index]
+          context_vector = make_context_vector(context, word_to_ix)  
+          log_probs = model(context_vector.to(device))
+          total_loss += loss_function(log_probs, torch.tensor([word_to_ix[target]]).to(device))
+      count = count+1
+      #optimize at the end of each epoch
+      optimizer.zero_grad()
+      total_loss.backward()
+      optimizer.step()
+
+
+
+#%%
+
+def cbow_document_vector(cbow_model, doc):
+    # remove out-of-vocabulary words
+    #doc = [word for word in doc if word in model.vocab]
+    arrays = []
+    for word in doc:
+      if word in word_to_ix.keys():
+        arrays.append(cbow_model.embeddings(torch.tensor([word_to_ix[word]]).to(device)).view(1, -1))
+    if arrays != []:
+      arrays = torch.cat(arrays, dim=0)
+      arrays = arrays.mean(dim=0)
+    else:
+      arrays = torch.zeros(100).to(device)
+
+    return arrays
+
+#%%
+
+x = []
+for doc in corpus: # append the vector for each document
+   x.append(cbow_document_vector(model, doc).view(1,-1))
+
+X = torch.cat(x, dim=0) # list to array
+X = X.detach().cpu().numpy()
+
+#%%
+
+x_pb = []
+for doc in pb_corpus: # append the vector for each document
+   x_pb.append(cbow_document_vector(model, doc).view(1,-1))
+
+X_pb = torch.cat(x_pb, dim=0) # list to array
+X_pb = X_pb.detach().cpu().numpy()
+
+#%%
+
+x_pvt = []
+for doc in pvt_corpus: # append the vector for each document
+   x_pvt.append(cbow_document_vector(model, doc).view(1,-1))
+
+X_pvt = torch.cat(x_pvt, dim=0) # list to array
+X_pvt = X_pvt.detach().cpu().numpy()
+
+#%%
+
+train_x_cbow = np.column_stack((train_x, X))
+public_x_cbow = np.column_stack((public_x, X_pb))
+private_x_cbow = np.column_stack((private_x, X_pvt))
+train_x_cbow.shape
+
+#%%
+
+# separate into training and testing set
+from sklearn.model_selection import train_test_split
+X_train_valid, X_test, y_train_valid, y_test = train_test_split(
+    train_x_cbow,  # predictors
+    train_y,  # target
+    test_size=0.2,  # percentage of obs in test set
+    random_state=0)  # seed to ensure reproducibility
+
+#%%
+
+# separate into training and testing set
+from sklearn.model_selection import train_test_split
+X_train, X_valid, y_train, y_valid = train_test_split(
+    X_train_valid,  # predictors
+    y_train_valid,  # target
+    test_size=0.2,  # percentage of obs in test set
+    random_state=0)  # seed to ensure reproducibility
+
+#%%
+
+X_train = torch.tensor(X_train).float()
+y_train=torch.tensor(y_train).float().reshape(-1, 1)
+X_valid = torch.tensor(X_valid).float()
+y_valid=torch.tensor(y_valid).float()
+X_test = torch.tensor(X_test).float()
+y_test=torch.tensor(y_test).float().reshape(-1, 1)
+
+#%%
+
+from torch.utils import data
+train_dataset = data.TensorDataset(X_train,y_train)
+valid_dataset = data.TensorDataset(X_valid,y_valid)
+test_dataset = data.TensorDataset(X_test,y_test)
+
+#%%
+
+batch_size=50
+train_loader= torch.utils.data.DataLoader(dataset=train_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=True,
+                                        num_workers=4)
+
+#%%
+
+valid_loader= torch.utils.data.DataLoader(dataset=valid_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+#%%
+
+test_loader= torch.utils.data.DataLoader(dataset=test_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+#%%
+
+model= linearRegression(train_x_cbow.shape[1], 1)
+
+#%%
+
+import torch.nn.functional as F
+import torch.nn as nn
+# STEP 5: INSTANTIATE LOSS CLASS
+criterion = nn.MSELoss(reduction='mean')
+
+# STEP 6: INSTANTIATE OPTIMIZER CLASS
+learning_rate = 0.05
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-2)
+
+#%%
+
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+print(device)
+model.to(device)
+
+#%%
+
+!pip install torch-lr-finder
+from torch_lr_finder import LRFinder
+lr_finder = LRFinder(model, optimizer, criterion, device=device)
+lr_finder.range_test(train_loader=train_loader, val_loader=valid_loader, end_lr=1.5, num_iter=100, step_mode="exp")
+
+#%%
+
+lr_finder.plot()
+lr_finder.reset()
+
+#%%
+
+criterion = nn.MSELoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=5.26E-02, weight_decay=1e-2)
+
+#%%
+
+from datetime import datetime
+# STEP 7: TRAIN THE MODEL
+patience = 10
+
+epochs=100
+
+counter_early_stop = 0
+best_score = None
+early_stop = False
+valid_loss_min = np.Inf
+delta=0
+path4 = 'early_stop_cbow_linreg_baseline.pt'
+
+train_losses= []
+valid_losses= []
+
+
+
+for epoch in range(epochs):
+  
+  t0= datetime.now()
+  train_loss=[]  
+  model.train()
+  for input,targets in train_loader:
+    # load input and output to GPU
+    input = input.to(device)
+    targets= targets.to(device)
+    
+    # forward pass
+    output= model(input)
+    loss=criterion(output,targets)
+
+    # set gradients to zero 
+    optimizer.zero_grad()
+
+    # backward pass
+    loss.backward()
+    optimizer.step()
+    train_loss.append(loss.item())
+  
+  train_loss=np.mean(train_loss)
+      
+  valid_loss=[]
+  model.eval()
+  with torch.no_grad():
+    for input,targets in valid_loader:
+      # load input and output to GPU
+      input = input.to(device)
+      targets= targets.to(device)
+      
+      # forward pass
+      output= model(input)
+      loss=criterion(output,targets)
+      valid_loss.append(loss.item())
+
+    valid_loss=np.mean(valid_loss)
+  
+  # save Losses
+  train_losses.append(train_loss)
+  valid_losses.append(valid_loss)
+  dt= datetime.now()-t0
+  print(f'Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.4f}    Valid Loss: {valid_loss:.4f}, Duration: {dt}')
+
+  ## Early Stopping
+
+  score = -valid_loss
+
+  if best_score is None:
+      best_score = score
+      print(f'Validation loss decreased ({valid_loss_min:.6f} --> {valid_loss:.6f}).  Saving model ...')
+      torch.save(model.state_dict(), path4)
+      valid_loss_min = valid_loss
+      
+  elif score < best_score + delta:
+      counter_early_stop += 1
+      print(f'Early Stopping counter: {counter_early_stop} out of {patience}')
+      if counter_early_stop >= patience:
+          early_stop = True
+  else:
+      best_score = score
+      print(f'Validation loss decreased ({valid_loss_min:.6f} --> {valid_loss:.6f}).  Saving model ...')
+      torch.save(model.state_dict(), path4)
+      counter_early_stop = 0
+      valid_loss_min = valid_loss
+
+  if early_stop:
+    print("Early stopping")
+    break
+  
+  
+
+#%%
+
+import matplotlib.pyplot as plt
+# visualize the loss as the network trained
+fig = plt.figure(figsize=(10,8))
+plt.plot(range(1,len(train_losses)+1),train_losses, label='Training Loss')
+plt.plot(range(1,len(valid_losses)+1),valid_losses,label='Validation Loss')
+
+# find position of lowest validation loss
+minposs = valid_losses.index(min(valid_losses))+1 
+plt.axvline(minposs, linestyle='--', color='r',label='Early Stopping Checkpoint')
+
+plt.xlabel('epochs')
+plt.ylabel('loss')
+plt.ylim(0, 100) # consistent scale
+plt.xlim(0, len(train_losses)+1) # consistent scale
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+fig.savefig('loss_plot.png', bbox_inches='tight')
+
+
+
+#%%
+
+model = linearRegression(train_x_cbow.shape[1], 1)
+model.to(device)
+model.load_state_dict(torch.load(path4))
+
+#%%
+
+# Accuracy- write a function to get accuracy
+# use this function to get train/test accuracy and print accuracy
+def get_mseloss(train_loader, valid_loader, test_loader, public_loader, private_loader, model):
+  model.eval()
+  with torch.no_grad():
+    train_loss = list()
+    valid_loss = list()
+    test_loss = list()
+    public_loss = list()
+    private_loss = list()
+
+    for input, targets in train_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      train_loss.extend(F.mse_loss(output, targets, reduction='none'))
+      
+    for input, targets in valid_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      valid_loss.extend(F.mse_loss(output, targets, reduction='none'))
+      
+    for input, targets in test_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      test_loss.extend(F.mse_loss(output, targets, reduction='none'))
+
+    for input, targets in public_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      public_loss.extend(F.mse_loss(output, targets, reduction='none'))
+    
+    for input, targets in private_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      private_loss.extend(F.mse_loss(output, targets, reduction='none'))
+    
+    train_loss = torch.cat(train_loss, dim=0).mean().item()
+    valid_loss = torch.cat(valid_loss, dim=0).mean().item()
+    test_loss = torch.cat(test_loss, dim=0).mean().item()
+    public_loss = torch.cat(public_loss, dim=0).mean().item()
+    private_loss = torch.cat(private_loss, dim=0).mean().item()
+
+    return train_loss, valid_loss, test_loss, public_loss, private_loss
+
+#%%
+
+X_public = torch.tensor(public_x_cbow).float()
+y_public = torch.tensor(public_y).float().reshape(-1, 1)
+X_private = torch.tensor(private_x_cbow).float()
+y_private = torch.tensor(private_y).float().reshape(-1, 1)
+public_dataset = data.TensorDataset(X_public,y_public)
+private_dataset = data.TensorDataset(X_private,y_private)
+public_loader= torch.utils.data.DataLoader(dataset=public_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+private_loader= torch.utils.data.DataLoader(dataset=public_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+tr_loss, vl_loss, tst_loss, pb_loss, pvt_loss = get_mseloss(train_loader, valid_loader, test_loader, public_loader, private_loader, model)
+print("Train Loss: ", tr_loss, ", Valid Loss: ", vl_loss, ", Test Loss: ", tst_loss, ", Public Loss: ", pb_loss, ", Private Loss: ", pvt_loss)
+
+#%% md
+
+#CBOW Results
+Public Loss:  20.415098190307617 , Private Loss:  20.415098190307617
+
+#%% md
+
+#CBOW Features combined with BOW featues
+
+#%%
+
+train_x_cmb_cbow = np.column_stack((train_x, data_vectorized, X))
+public_x_cmb_cbow = np.column_stack((public_x, public_vectorized, X_pb))
+private_x_cmb_cbow = np.column_stack((private_x, private_vectorized, X_pvt))
+train_x_cmb_cbow.shape
+
+#%%
+
+# separate into training and testing set
+from sklearn.model_selection import train_test_split
+X_train_valid, X_test, y_train_valid, y_test = train_test_split(
+    train_x_cmb_cbow,  # predictors
+    train_y,  # target
+    test_size=0.2,  # percentage of obs in test set
+    random_state=0)  # seed to ensure reproducibility
+
+#%%
+
+# separate into training and testing set
+from sklearn.model_selection import train_test_split
+X_train, X_valid, y_train, y_valid = train_test_split(
+    X_train_valid,  # predictors
+    y_train_valid,  # target
+    test_size=0.2,  # percentage of obs in test set
+    random_state=0)  # seed to ensure reproducibility
+
+#%%
+
+X_train = torch.tensor(X_train).float()
+y_train=torch.tensor(y_train).float().reshape(-1, 1)
+X_valid = torch.tensor(X_valid).float()
+y_valid=torch.tensor(y_valid).float()
+X_test = torch.tensor(X_test).float()
+y_test=torch.tensor(y_test).float().reshape(-1, 1)
+
+#%%
+
+from torch.utils import data
+train_dataset = data.TensorDataset(X_train,y_train)
+valid_dataset = data.TensorDataset(X_valid,y_valid)
+test_dataset = data.TensorDataset(X_test,y_test)
+
+#%%
+
+batch_size=50
+train_loader= torch.utils.data.DataLoader(dataset=train_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=True,
+                                        num_workers=4)
+
+#%%
+
+valid_loader= torch.utils.data.DataLoader(dataset=valid_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+#%%
+
+test_loader= torch.utils.data.DataLoader(dataset=test_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+#%%
+
+model= linearRegression(train_x_cmb_cbow.shape[1], 1)
+
+#%%
+
+import torch.nn.functional as F
+import torch.nn as nn
+# STEP 5: INSTANTIATE LOSS CLASS
+criterion = nn.MSELoss(reduction='mean')
+
+# STEP 6: INSTANTIATE OPTIMIZER CLASS
+learning_rate = 0.05
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-2)
+
+#%%
+
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+print(device)
+model.to(device)
+
+#%%
+
+!pip install torch-lr-finder
+from torch_lr_finder import LRFinder
+lr_finder = LRFinder(model, optimizer, criterion, device=device)
+lr_finder.range_test(train_loader=train_loader, val_loader=valid_loader, end_lr=1.5, num_iter=100, step_mode="exp")
+
+#%%
+
+lr_finder.plot()
+lr_finder.reset()
+
+#%%
+
+criterion = nn.MSELoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=5.26E-02, weight_decay=1e-2)
+
+#%%
+
+from datetime import datetime
+# STEP 7: TRAIN THE MODEL
+patience = 10
+
+epochs=100
+
+counter_early_stop = 0
+best_score = None
+early_stop = False
+valid_loss_min = np.Inf
+delta=0
+path5 = 'early_stop_cmb_cbow_linreg_baseline.pt'
+
+train_losses= []
+valid_losses= []
+
+
+
+for epoch in range(epochs):
+  
+  t0= datetime.now()
+  train_loss=[]  
+  model.train()
+  for input,targets in train_loader:
+    # load input and output to GPU
+    input = input.to(device)
+    targets= targets.to(device)
+    
+    # forward pass
+    output= model(input)
+    loss=criterion(output,targets)
+
+    # set gradients to zero 
+    optimizer.zero_grad()
+
+    # backward pass
+    loss.backward()
+    optimizer.step()
+    train_loss.append(loss.item())
+  
+  train_loss=np.mean(train_loss)
+      
+  valid_loss=[]
+  model.eval()
+  with torch.no_grad():
+    for input,targets in valid_loader:
+      # load input and output to GPU
+      input = input.to(device)
+      targets= targets.to(device)
+      
+      # forward pass
+      output= model(input)
+      loss=criterion(output,targets)
+      valid_loss.append(loss.item())
+
+    valid_loss=np.mean(valid_loss)
+  
+  # save Losses
+  train_losses.append(train_loss)
+  valid_losses.append(valid_loss)
+  dt= datetime.now()-t0
+  print(f'Epoch {epoch+1}/{epochs}, Train Loss: {train_loss:.4f}    Valid Loss: {valid_loss:.4f}, Duration: {dt}')
+
+  ## Early Stopping
+
+  score = -valid_loss
+
+  if best_score is None:
+      best_score = score
+      print(f'Validation loss decreased ({valid_loss_min:.6f} --> {valid_loss:.6f}).  Saving model ...')
+      torch.save(model.state_dict(), path5)
+      valid_loss_min = valid_loss
+      
+  elif score < best_score + delta:
+      counter_early_stop += 1
+      print(f'Early Stopping counter: {counter_early_stop} out of {patience}')
+      if counter_early_stop >= patience:
+          early_stop = True
+  else:
+      best_score = score
+      print(f'Validation loss decreased ({valid_loss_min:.6f} --> {valid_loss:.6f}).  Saving model ...')
+      torch.save(model.state_dict(), path5)
+      counter_early_stop = 0
+      valid_loss_min = valid_loss
+
+  if early_stop:
+    print("Early stopping")
+    break
+  
+  
+
+#%%
+
+import matplotlib.pyplot as plt
+# visualize the loss as the network trained
+fig = plt.figure(figsize=(10,8))
+plt.plot(range(1,len(train_losses)+1),train_losses, label='Training Loss')
+plt.plot(range(1,len(valid_losses)+1),valid_losses,label='Validation Loss')
+
+# find position of lowest validation loss
+minposs = valid_losses.index(min(valid_losses))+1 
+plt.axvline(minposs, linestyle='--', color='r',label='Early Stopping Checkpoint')
+
+plt.xlabel('epochs')
+plt.ylabel('loss')
+plt.ylim(0, 100) # consistent scale
+plt.xlim(0, len(train_losses)+1) # consistent scale
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+fig.savefig('loss_plot.png', bbox_inches='tight')
+
+
+
+#%%
+
+model = linearRegression(train_x_cmb_cbow.shape[1], 1)
+model.to(device)
+model.load_state_dict(torch.load(path5))
+
+#%%
+
+# Accuracy- write a function to get accuracy
+# use this function to get train/test accuracy and print accuracy
+def get_mseloss(train_loader, valid_loader, test_loader, public_loader, private_loader, model):
+  model.eval()
+  with torch.no_grad():
+    train_loss = list()
+    valid_loss = list()
+    test_loss = list()
+    public_loss = list()
+    private_loss = list()
+
+    for input, targets in train_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      train_loss.extend(F.mse_loss(output, targets, reduction='none'))
+      
+    for input, targets in valid_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      valid_loss.extend(F.mse_loss(output, targets, reduction='none'))
+      
+    for input, targets in test_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      test_loss.extend(F.mse_loss(output, targets, reduction='none'))
+
+    for input, targets in public_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      public_loss.extend(F.mse_loss(output, targets, reduction='none'))
+    
+    for input, targets in private_loader:
+      input= input.to(device)
+      targets= targets.to(device)
+      #input = input.view(-1, 784)
+      output=model(input)
+      private_loss.extend(F.mse_loss(output, targets, reduction='none'))
+    
+    train_loss = torch.cat(train_loss, dim=0).mean().item()
+    valid_loss = torch.cat(valid_loss, dim=0).mean().item()
+    test_loss = torch.cat(test_loss, dim=0).mean().item()
+    public_loss = torch.cat(public_loss, dim=0).mean().item()
+    private_loss = torch.cat(private_loss, dim=0).mean().item()
+    
+    return train_loss, valid_loss, test_loss, public_loss, private_loss
+
+#%%
+
+X_public = torch.tensor(public_x_cmb_cbow).float()
+y_public = torch.tensor(public_y).float().reshape(-1, 1)
+X_private = torch.tensor(private_x_cmb_cbow).float()
+y_private = torch.tensor(private_y).float().reshape(-1, 1)
+public_dataset = data.TensorDataset(X_public,y_public)
+private_dataset = data.TensorDataset(X_private,y_private)
+public_loader= torch.utils.data.DataLoader(dataset=public_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+private_loader= torch.utils.data.DataLoader(dataset=public_dataset,
+                                        batch_size=batch_size,
+                                        shuffle=False,
+                                        num_workers=4)
+
+tr_loss, vl_loss, tst_loss, pb_loss, pvt_loss = get_mseloss(train_loader, valid_loader, test_loader, public_loader, private_loader, model)
+print("Train Loss: ", tr_loss, ", Valid Loss: ", vl_loss, ", Test Loss: ", tst_loss, ", Public Loss: ", pb_loss, ", Private Loss: ", pvt_loss)
+
+#%% md
+
+#CBOW with BOW Features results
+Public Loss:  14.506821632385254 , Private Loss:  14.506821632385254
